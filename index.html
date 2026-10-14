@@ -129,135 +129,309 @@ details.key summary{cursor:pointer;font-weight:600}
   .qstat{grid-template-columns:32px minmax(0,1fr) 70px 40px}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+/* Part B and grader additions */
+.parts{display:flex;flex-direction:column;gap:8px}
+.parts>div{display:flex;flex-direction:column;border-left:3px solid var(--accent);padding-left:10px}
+.pill{background:var(--accent-soft);color:var(--fg)}
+textarea.sql{min-height:170px;font-size:.88rem;line-height:1.5;tab-size:2}
+.fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}
+.ul{margin:6px 0 8px;padding-left:22px}
+.grid button.wq{border-style:dashed;border-color:var(--warn)}
+.grid button.wq.done{background:var(--accent-soft);border-color:var(--accent);border-style:solid}
+details.expected summary{cursor:pointer}
+details.expected[open] summary{margin-bottom:12px}
+.expgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:8px}
+.sqlgrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px}
+.sqlcard{margin-bottom:12px}
+.ans{font-size:.88rem;font-variant-numeric:tabular-nums}
+@media (max-width:820px){.sqlgrid{grid-template-columns:minmax(0,1fr)}}
 </style>
 
 <div id="app"></div>
-
 <script>
 (function(){
 "use strict";
-const TEST_ID = "SQL2";
-const DURATION_MIN = 25;
-const STORE_KEY = "sqlw2-attempt-v1";
+const TEST_ID = "SQL3";
+const DURATION_MIN = 35;
+const STORE_KEY = "sqlw2-attempt-v3";
+const CFG_KEY = "sqlw2-grader-expected-v3";
+const SALT = "olist-w2-v3-grain";
 
-/* ---------- Questions (Week 2 · Day 1 + Day 2) ---------- */
-const Q = [
- {id:1, topic:"Query order", day:"D1",
-  text:"In what order does PostgreSQL logically process these clauses?",
-  opts:["SELECT → FROM → WHERE → GROUP BY → ORDER BY","FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT","FROM → SELECT → WHERE → GROUP BY → HAVING → ORDER BY","WHERE → FROM → GROUP BY → SELECT → HAVING → ORDER BY"],
-  why:"You write SELECT first, but Postgres runs it fifth: FROM, WHERE, GROUP BY, HAVING, SELECT, ORDER BY, LIMIT."},
- {id:2, topic:"Query order", day:"D1",
-  text:"This query fails with <code>column \"total_paid\" does not exist</code>. Why?",
-  code:"SELECT order_id, price + freight_value AS total_paid\nFROM raw.order_items\nWHERE total_paid > 100;",
-  opts:["You cannot add two columns in SELECT","Aliases need double quotes in WHERE","WHERE runs before SELECT, so the alias does not exist yet","The table needs a LIMIT clause"],
-  why:"The alias is created in SELECT, which runs after WHERE. Repeat the expression in WHERE (or use a CTE). The alias is allowed in ORDER BY because that runs after SELECT."},
- {id:3, topic:"COUNT & DISTINCT", day:"D1",
-  text:"<code>raw.customers</code> has 99,441 rows, and <code>COUNT(DISTINCT customer_unique_id)</code> returns 96,096. What does this query return?",
-  code:"SELECT DISTINCT COUNT(customer_unique_id)\nFROM raw.customers;",
-  opts:["96,096","99,441","3,345","An error: DISTINCT cannot be used with COUNT"],
-  why:"COUNT runs first and counts every non-NULL value (99,441). DISTINCT then applies to the single result row, so it changes nothing. Put DISTINCT inside COUNT() to count unique people."},
- {id:4, topic:"COUNT & DISTINCT", day:"D1",
-  text:"Which expression counts <b>every row</b>, including rows where the column is NULL?",
-  opts:["COUNT(order_delivered_customer_date)","COUNT(DISTINCT order_id)","COUNT(*)","SUM(1) FILTER (WHERE order_id IS NOT NULL)"],
-  why:"COUNT(*) counts rows. COUNT(col) skips NULLs in that column, and COUNT(DISTINCT col) counts unique non-NULL values."},
- {id:5, topic:"WHERE vs HAVING", day:"D1",
-  text:"You need sellers who sold <b>more than 100 items</b>. Which query is correct?",
-  opts:[
-   {code:"SELECT seller_id, COUNT(*)\nFROM raw.order_items\nWHERE COUNT(*) > 100\nGROUP BY seller_id;"},
-   {code:"SELECT seller_id, COUNT(*)\nFROM raw.order_items\nGROUP BY seller_id\nHAVING COUNT(*) > 100;"},
-   {code:"SELECT seller_id, COUNT(*) AS items\nFROM raw.order_items\nWHERE items > 100;"},
-   {code:"SELECT seller_id, COUNT(*)\nFROM raw.order_items\nHAVING seller_id > 100;"}],
-  why:"WHERE filters rows before grouping and cannot use aggregates. HAVING filters groups after GROUP BY, so it is where COUNT(*) > 100 belongs."},
- {id:6, topic:"GROUP BY", day:"D1",
-  text:"This query fails with <code>column \"customer_city\" must appear in the GROUP BY clause</code>. What is the correct fix?",
-  code:"SELECT customer_state, customer_city, COUNT(*)\nFROM raw.customers\nGROUP BY customer_state;",
-  opts:["Add customer_city to GROUP BY, or remove it from SELECT","Add DISTINCT after SELECT","Move COUNT(*) into the WHERE clause","Add ORDER BY customer_city"],
-  why:"Every column in SELECT must be either in GROUP BY or inside an aggregate. Postgres can't pick one city for a whole state."},
- {id:7, topic:"ORDER BY & LIMIT", day:"D1",
-  text:"What does <code>SELECT * FROM raw.orders LIMIT 10;</code> return?",
-  opts:["The 10 oldest orders","The 10 most recent orders","The first 10 rows by order_id","Any 10 rows. Without ORDER BY, the order is not guaranteed"],
-  why:"SQL tables have no built-in order. Use ORDER BY (plus a tie-breaker column) whenever the order matters."},
- {id:8, topic:"Join syntax", day:"D2",
-  text:"A join of <code>raw.orders</code> and <code>raw.order_items</code> fails with <code>column reference \"order_id\" is ambiguous</code>. What fixes it?",
-  opts:["Prefix the column with its table alias, e.g. o.order_id","Use LEFT JOIN instead of JOIN","Wrap order_id in DISTINCT","Rename the column in one of the tables"],
-  why:"Both tables have order_id, so Postgres doesn't know which one you mean. Always alias tables and prefix every column."},
- {id:9, topic:"Grain & keys", day:"D2",
-  text:"What is the <b>grain</b> of <code>raw.order_items</code>?",
-  opts:["One row per order","One row per product","One row per item within an order","One row per seller"],
-  why:"Grain answers \"one row per what?\". An order with 3 items has 3 rows in order_items, so order_id is not unique there."},
- {id:10, topic:"Row multiplication", day:"D2",
-  text:"<code>raw.orders</code> has 99,441 rows. <code>orders LEFT JOIN order_reviews ON order_id</code> returns <b>more</b> than 99,441 rows. Why?",
-  opts:["LEFT JOIN also adds reviews that have no order","LEFT JOIN behaves like a CROSS JOIN","NULL review scores are counted twice","Some orders have more than one review, so those orders repeat"],
-  why:"An order with several reviews matches several right-side rows and produces one output row per match (1-to-many). LEFT JOIN never returns fewer rows than the left table, but it can return more."},
- {id:11, topic:"Join types", day:"D2",
-  text:"Which query correctly counts orders that have <b>no review at all</b>?",
-  opts:[
-   {code:"SELECT COUNT(*)\nFROM raw.orders o\nJOIN raw.order_reviews r ON r.order_id = o.order_id\nWHERE r.order_id IS NULL;"},
-   {code:"SELECT COUNT(*)\nFROM raw.orders o\nLEFT JOIN raw.order_reviews r ON r.order_id = o.order_id\nWHERE r.order_id IS NULL;"},
-   {code:"SELECT COUNT(*)\nFROM raw.orders o\nLEFT JOIN raw.order_reviews r ON r.order_id = o.order_id\nWHERE o.order_id IS NULL;"},
-   {code:"SELECT COUNT(*)\nFROM raw.order_reviews r\nWHERE r.review_score IS NULL;"}],
-  why:"The anti-join pattern: LEFT JOIN, then keep the rows where the right-side key IS NULL. An INNER JOIN has already removed those rows, and o.order_id is never NULL."},
- {id:12, topic:"LEFT JOIN trap", day:"D2",
-  text:"What does this query actually return?",
-  code:"SELECT o.order_id, r.review_score\nFROM raw.orders o\nLEFT JOIN raw.order_reviews r ON r.order_id = o.order_id\nWHERE r.review_score = 5;",
-  opts:["Only orders with a 5-star review. The WHERE turns it into an INNER JOIN","All orders, with score 5 or NULL","All orders, because LEFT JOIN keeps every left row","An error: you cannot filter the right table of a LEFT JOIN"],
-  why:"Orders with no review have a NULL score, and WHERE removes them. To keep every order, move the condition into ON: ON r.order_id = o.order_id AND r.review_score = 5."},
- {id:13, topic:"Row multiplication", day:"D2",
-  text:"An order has <b>3 items</b> and <b>1 payment</b> of 109.29. After joining order_items to order_payments on order_id, <code>SUM(payment_value)</code> shows 327.87. What is the right fix?",
-  opts:["Use SUM(DISTINCT payment_value)","Switch to LEFT JOIN","Aggregate each table to one row per order_id first, then join","Divide the result by COUNT(*)"],
-  why:"The single payment row is copied onto every item row (3 × 109.29). Pre-aggregate both child tables to the same grain (order_id), then join. SUM(DISTINCT) breaks as soon as two real payments have the same value."},
- {id:14, topic:"Row multiplication", day:"D2",
-  text:"A 3-table join runs forever and returns millions of rows. What is the <b>most likely</b> cause?",
-  opts:["The tables are missing indexes","You used too many table aliases","LEFT JOIN is slower than INNER JOIN","A missing or wrong ON condition created an accidental CROSS JOIN"],
-  why:"Without a correct ON, every row matches every row. Check every ON condition, and compare COUNT(*) before and after each join."},
- {id:15, topic:"Join types", day:"D2",
-  text:"For \"top product categories in English\", why do we <b>LEFT JOIN</b> products to the category translation table instead of INNER JOIN?",
-  opts:["LEFT JOIN is always faster","INNER JOIN would duplicate every category","Some products have no category, or a category with no translation. INNER JOIN would silently drop their items","The translation table has no primary key"],
-  why:"INNER JOIN drops rows that have no match, so those items would vanish from the totals without any error. LEFT JOIN keeps them, with a NULL English name you can label or investigate."}
+/* ---------- Questions ---------- */
+const MCQ = [
+ {
+  "id": 1,
+  "topic": "Query order",
+  "day": "D1",
+  "text": "In what order does PostgreSQL logically process these clauses?",
+  "opts": [
+   "SELECT → FROM → WHERE → GROUP BY → ORDER BY",
+   "FROM → WHERE → GROUP BY → HAVING → SELECT → ORDER BY → LIMIT",
+   "FROM → SELECT → WHERE → GROUP BY → HAVING → ORDER BY",
+   "WHERE → FROM → GROUP BY → SELECT → HAVING → ORDER BY"
+  ],
+  "why": "You write SELECT first, but Postgres runs it fifth: FROM, WHERE, GROUP BY, HAVING, SELECT, ORDER BY, LIMIT."
+ },
+ {
+  "id": 2,
+  "topic": "Query order",
+  "day": "D1",
+  "text": "This query fails with <code>column \"total_paid\" does not exist</code>. Why?",
+  "code": "SELECT order_id, price + freight_value AS total_paid\nFROM raw.order_items\nWHERE total_paid > 100;",
+  "opts": [
+   "You cannot add two columns in SELECT",
+   "Aliases need double quotes in WHERE",
+   "WHERE runs before SELECT, so the alias does not exist yet",
+   "The table needs a LIMIT clause"
+  ],
+  "why": "The alias is created in SELECT, which runs after WHERE. Repeat the expression in WHERE (or use a CTE). The alias is allowed in ORDER BY because that runs after SELECT."
+ },
+ {
+  "id": 3,
+  "topic": "COUNT & DISTINCT",
+  "day": "D1",
+  "text": "<code>raw.customers</code> has 99,441 rows, and <code>COUNT(DISTINCT customer_unique_id)</code> returns 96,096. What does this query return?",
+  "code": "SELECT DISTINCT COUNT(customer_unique_id)\nFROM raw.customers;",
+  "opts": [
+   "96,096",
+   "99,441",
+   "3,345",
+   "An error: DISTINCT cannot be used with COUNT"
+  ],
+  "why": "COUNT runs first and counts every non-NULL value (99,441). DISTINCT then applies to the single result row, so it changes nothing. Put DISTINCT inside COUNT() to count unique people."
+ },
+ {
+  "id": 4,
+  "topic": "COUNT & DISTINCT",
+  "day": "D1",
+  "text": "Some orders are not delivered yet, so <code>order_delivered_customer_date</code> is NULL for them. Which expression counts <b>every row</b> in <code>raw.orders</code>, including those?",
+  "opts": [
+   "COUNT(order_delivered_customer_date)",
+   "COUNT(DISTINCT order_status)",
+   "COUNT(*)",
+   "COUNT(DISTINCT order_delivered_customer_date)"
+  ],
+  "why": "COUNT(*) counts rows. COUNT(col) skips NULLs in that column, and COUNT(DISTINCT col) counts unique non-NULL values."
+ },
+ {
+  "id": 5,
+  "topic": "WHERE vs HAVING",
+  "day": "D1",
+  "text": "You need sellers who sold <b>more than 100 items</b>. Which query is correct?",
+  "opts": [
+   {
+    "code": "SELECT seller_id, COUNT(*)\nFROM raw.order_items\nWHERE COUNT(*) > 100\nGROUP BY seller_id;"
+   },
+   {
+    "code": "SELECT seller_id, COUNT(*)\nFROM raw.order_items\nGROUP BY seller_id\nHAVING COUNT(*) > 100;"
+   },
+   {
+    "code": "SELECT seller_id, COUNT(*) AS items\nFROM raw.order_items\nWHERE items > 100;"
+   },
+   {
+    "code": "SELECT seller_id, COUNT(*)\nFROM raw.order_items\nHAVING seller_id > 100;"
+   }
+  ],
+  "why": "WHERE filters rows before grouping and cannot use aggregates. HAVING filters groups after GROUP BY, so it is where COUNT(*) > 100 belongs."
+ },
+ {
+  "id": 6,
+  "topic": "GROUP BY",
+  "day": "D1",
+  "text": "This query fails with <code>column \"customer_city\" must appear in the GROUP BY clause</code>. What is the correct fix?",
+  "code": "SELECT customer_state, customer_city, COUNT(*)\nFROM raw.customers\nGROUP BY customer_state;",
+  "opts": [
+   "Add customer_city to GROUP BY, or remove it from SELECT",
+   "Add DISTINCT after SELECT",
+   "Move COUNT(*) into the WHERE clause",
+   "Add ORDER BY customer_city"
+  ],
+  "why": "Every column in SELECT must be either in GROUP BY or inside an aggregate. Postgres can't pick one city for a whole state."
+ },
+ {
+  "id": 7,
+  "topic": "ORDER BY & LIMIT",
+  "day": "D1",
+  "text": "What does <code>SELECT * FROM raw.orders LIMIT 10;</code> return?",
+  "opts": [
+   "The 10 oldest orders",
+   "The 10 most recent orders",
+   "The first 10 rows by order_id",
+   "Any 10 rows. Without ORDER BY, the order is not guaranteed"
+  ],
+  "why": "SQL tables have no built-in order. Use ORDER BY (plus a tie-breaker column) whenever the order matters."
+ },
+ {
+  "id": 8,
+  "topic": "Join syntax",
+  "day": "D2",
+  "text": "A join of <code>raw.orders</code> and <code>raw.order_items</code> fails with <code>column reference \"order_id\" is ambiguous</code>. What fixes it?",
+  "opts": [
+   "Prefix the column with its table alias, e.g. o.order_id",
+   "Use LEFT JOIN instead of JOIN",
+   "Wrap order_id in DISTINCT",
+   "Rename the column in one of the tables"
+  ],
+  "why": "Both tables have order_id, so Postgres doesn't know which one you mean. Always alias tables and prefix every column."
+ },
+ {
+  "id": 9,
+  "topic": "Grain & keys",
+  "day": "D2",
+  "text": "What is the <b>grain</b> of <code>raw.orders</code>?",
+  "opts": [
+   "One row per item within an order",
+   "One row per payment of an order",
+   "One row per order",
+   "One row per real customer (customer_unique_id)"
+  ],
+  "why": "Grain answers \"one row per what?\". In raw.orders, order_id is the primary key: one row per order, with its status and five timestamps (99,441 rows). Items live in order_items and payments in order_payments, which is why joining them to orders multiplies rows."
+ },
+ {
+  "id": 10,
+  "topic": "Row multiplication",
+  "day": "D2",
+  "text": "<code>raw.orders</code> has 99,441 rows. <code>orders LEFT JOIN order_reviews ON order_id</code> returns <b>more</b> than 99,441 rows. Why?",
+  "opts": [
+   "LEFT JOIN also adds reviews that have no order",
+   "LEFT JOIN behaves like a CROSS JOIN",
+   "NULL review scores are counted twice",
+   "Some orders have more than one review, so those orders repeat"
+  ],
+  "why": "An order with several reviews matches several right-side rows and produces one output row per match (1-to-many). LEFT JOIN never returns fewer rows than the left table, but it can return more."
+ },
+ {
+  "id": 11,
+  "topic": "Join types",
+  "day": "D2",
+  "text": "Which query correctly counts orders that have <b>no review at all</b>?",
+  "opts": [
+   {
+    "code": "SELECT COUNT(*)\nFROM raw.orders o\nJOIN raw.order_reviews r ON r.order_id = o.order_id\nWHERE r.order_id IS NULL;"
+   },
+   {
+    "code": "SELECT COUNT(*)\nFROM raw.orders o\nLEFT JOIN raw.order_reviews r ON r.order_id = o.order_id\nWHERE r.order_id IS NULL;"
+   },
+   {
+    "code": "SELECT COUNT(*)\nFROM raw.orders o\nLEFT JOIN raw.order_reviews r ON r.order_id = o.order_id\nWHERE o.order_id IS NULL;"
+   },
+   {
+    "code": "SELECT COUNT(*)\nFROM raw.order_reviews r\nWHERE r.review_score IS NULL;"
+   }
+  ],
+  "why": "The anti-join pattern: LEFT JOIN, then keep the rows where the right-side key IS NULL. An INNER JOIN has already removed those rows, and o.order_id is never NULL."
+ },
+ {
+  "id": 12,
+  "topic": "LEFT JOIN trap",
+  "day": "D2",
+  "text": "What does this query actually return?",
+  "code": "SELECT o.order_id, r.review_score\nFROM raw.orders o\nLEFT JOIN raw.order_reviews r ON r.order_id = o.order_id\nWHERE r.review_score = 5;",
+  "opts": [
+   "Only orders with a 5-star review. The WHERE turns it into an INNER JOIN",
+   "All orders, with score 5 or NULL",
+   "All orders, because LEFT JOIN keeps every left row",
+   "An error: you cannot filter the right table of a LEFT JOIN"
+  ],
+  "why": "Orders with no review have a NULL score, and WHERE removes them. To keep every order, move the condition into ON: ON r.order_id = o.order_id AND r.review_score = 5."
+ },
+ {
+  "id": 13,
+  "topic": "Row multiplication",
+  "day": "D2",
+  "text": "An order has <b>3 items</b> and <b>1 payment</b> of 109.29. After joining order_items to order_payments on order_id, <code>SUM(payment_value)</code> shows 327.87. What is the right fix?",
+  "opts": [
+   "Use SUM(DISTINCT payment_value)",
+   "Switch to LEFT JOIN",
+   "Aggregate each table to one row per order_id first, then join",
+   "Divide the result by COUNT(*)"
+  ],
+  "why": "The single payment row is copied onto every item row (3 × 109.29). Pre-aggregate both child tables to the same grain (order_id), then join. SUM(DISTINCT) breaks as soon as two real payments have the same value."
+ }
 ];
-// Answer key, lightly encoded so it is not readable at a glance in the page source.
-const K = atob("YmNiY2JhZGFjZGJhY2Rj").split("").map(c=>c.charCodeAt(0)-97);
-const KEY = {}; Q.forEach((q,i)=>KEY[q.id]=K[i]);
+const W = [
+ {id:14, topic:"Write & run SQL", points:2,
+  html:`Write a query that returns the <b>number of orders per customer state</b>, sorted with the most orders first. Run it on your <code>olist_dw</code> database.`,
+  fields:[{k:"state",label:"Which state is ranked #1?",ph:"e.g. RJ",kind:"text"},{k:"orders",label:"How many orders does it have?",ph:"e.g. 12345",kind:"num"}],
+  model:"SELECT c.customer_state,\n       COUNT(o.order_id) AS orders\nFROM raw.orders AS o\nJOIN raw.customers AS c\n  ON c.customer_id = o.customer_id\nGROUP BY c.customer_state\nORDER BY orders DESC;",
+  why:"Join orders to customers on customer_id, group by state, count orders, sort DESC. COUNT(*) or COUNT(DISTINCT o.order_id) give the same result here because customer_id is one row per order. Common mistakes: COUNT(DISTINCT customer_unique_id) counts people (too low); joining payments or items with COUNT(*) causes fan-out (too high)."},
+ {id:15, topic:"Write & run SQL", points:3,
+  html:`For each <b>product category</b> (<code>product_category_name</code>), show:<ul class="ul"><li>the number of items sold</li><li>the number of different sellers who sold items in that category</li></ul>Sort the categories by items sold, highest first. Run your query on <code>olist_dw</code>, then enter:`,
+  fields:[{k:"cat",label:"The #1 category",ph:"category name",kind:"text"},{k:"items",label:"Its items sold",ph:"number",kind:"num"},{k:"sellers",label:"Its number of different sellers",ph:"number",kind:"num"}],
+  model:"SELECT p.product_category_name,\n       COUNT(*)                     AS items_sold,\n       COUNT(DISTINCT oi.seller_id) AS sellers\nFROM raw.order_items AS oi\nJOIN raw.products AS p\n  ON p.product_id = oi.product_id\nGROUP BY p.product_category_name\nORDER BY items_sold DESC;",
+  why:"order_items is one row per item, so COUNT(*) counts items sold. Sellers repeat across items, so they need COUNT(DISTINCT oi.seller_id); plain COUNT(seller_id) equals items sold (fan-out). The full result also has a NULL category row: products with no category are grouped together."}
+];
+const DEFAULT_EXPECTED = {state:"SP", orders:"41746", cat:"cama_mesa_banho", items:"11115", sellers:""};
+const K = atob("YmNiY2JhZGFjZGJhYw==").split("").map(c=>c.charCodeAt(0)-97);
+const KEY = {}; MCQ.forEach((q,i)=>KEY[q.id]=K[i]);
+const TOTAL = MCQ.length + W.reduce((n,w)=>n+w.points,0);
+const PASS = 14;
 const L = ["A","B","C","D"];
 
 /* ---------- Helpers ---------- */
 const $ = (s,el=document)=>el.querySelector(s);
-const esc = s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const esc = s=>String(s==null?"":s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const fmt = sec=>{sec=Math.max(0,Math.round(sec));return String(Math.floor(sec/60)).padStart(2,"0")+":"+String(sec%60).padStart(2,"0")};
-function load(){try{return JSON.parse(localStorage.getItem(STORE_KEY)||"null")}catch(e){return null}}
-function save(){try{localStorage.setItem(STORE_KEY,JSON.stringify(S))}catch(e){}}
+function load(k){try{return JSON.parse(localStorage.getItem(k)||"null")}catch(e){return null}}
+function store(k,v){try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}}
 function clearStore(){try{localStorage.removeItem(STORE_KEY)}catch(e){}}
 function hash(str){let h=2166136261;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)}return (h>>>0).toString(36).padStart(6,"0").slice(-6)}
-const SALT="olist-w2-grain";
-function b64e(str){const b=new TextEncoder().encode(str);let s="";b.forEach(x=>s+=String.fromCharCode(x));return btoa(s).replace(/\+/g,"_").replace(/\//g,".").replace(/=+$/,"")}
-function b64d(s){s=s.replace(/_/g,"+").replace(/\./g,"/");while(s.length%4)s+="=";const bin=atob(s);const b=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);return new TextDecoder().decode(b)}
 function shuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a}
+function bytesToB64(b){let s="";for(let i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s).replace(/\+/g,"_").replace(/\//g,".").replace(/=+$/,"")}
+function b64ToBytes(s){s=s.replace(/_/g,"+").replace(/\./g,"/");while(s.length%4)s+="=";const bin=atob(s);const b=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)b[i]=bin.charCodeAt(i);return b}
+async function pipe(bytes,stream){const r=new Response(new Blob([bytes]).stream().pipeThrough(stream));return new Uint8Array(await r.arrayBuffer())}
+async function pack(str){
+  const raw=new TextEncoder().encode(str);
+  try{if(typeof CompressionStream!=="undefined"){const z=await pipe(raw,new CompressionStream("deflate-raw"));if(z.length<raw.length)return "z"+bytesToB64(z)}}catch(e){}
+  return "p"+bytesToB64(raw);
+}
+async function unpack(s){
+  const kind=s[0],b=b64ToBytes(s.slice(1));
+  if(kind==="z")return new TextDecoder().decode(await pipe(b,new DecompressionStream("deflate-raw")));
+  return new TextDecoder().decode(b);
+}
+const squash = sql=>String(sql||"").replace(/--[^\n]*/g,"").replace(/\s+/g," ").trim();
+const normNum = v=>String(v==null?"":v).replace(/[\s,]/g,"").replace(/\.0+$/,"");
+const normTxt = v=>String(v==null?"":v).trim().toLowerCase().replace(/\s+/g,"_");
 
-function makeCode(st){
-  const ans=Q.map(q=>st.answers[q.id]==null?"-":"abcd"[st.answers[q.id]]).join("");
+/* ---------- Result code ---------- */
+async function makeCode(st){
+  const ans=MCQ.map(q=>st.answers[q.id]==null?"-":"abcd"[st.answers[q.id]]).join("");
   const used=Math.round(Math.min(DURATION_MIN*60,(st.submittedAt-st.startedAt)/1000));
-  const payload=[st.name,ans,used,st.leaves,st.submittedAt,st.auto?1:0].join("|");
-  return TEST_ID+"-"+b64e(payload)+"-"+hash(SALT+payload);
+  const w=st.written||{};
+  const arr=[st.name,ans,used,st.leaves||0,st.submittedAt,st.auto?1:0,
+    (w.state||"").trim(),(w.orders||"").trim(),(w.cat||"").trim(),(w.items||"").trim(),(w.sellers||"").trim(),
+    squash(w.sql14).slice(0,900),squash(w.sql15).slice(0,900)];
+  const payload=JSON.stringify(arr);
+  return TEST_ID+"-"+(await pack(payload))+"-"+hash(SALT+payload);
 }
-function parseCode(code){
-  const m=/^SQL2-([A-Za-z0-9_.]+)-([0-9a-z]{6})$/.exec(code.trim());
+async function parseCode(code){
+  const m=/^SQL3-([zp][A-Za-z0-9_.]+)-([0-9a-z]{6})$/.exec(code.trim());
   if(!m)return null;
-  let payload;try{payload=b64d(m[1])}catch(e){return null}
-  const parts=payload.split("|");if(parts.length<6)return null;
-  const [name,ans,used,leaves,at,auto]=parts;
-  const answers={};Q.forEach((q,i)=>{const c=ans[i];answers[q.id]=(c&&c!=="-")?"abcd".indexOf(c):null});
-  return {name,answers,used:+used,leaves:+leaves,at:+at,auto:auto==="1",valid:hash(SALT+payload)===m[2],code:code.trim()};
+  let payload;try{payload=await unpack(m[1])}catch(e){return null}
+  let a;try{a=JSON.parse(payload)}catch(e){return null}
+  if(!Array.isArray(a)||a.length<13)return null;
+  const answers={};MCQ.forEach((q,i)=>{const c=a[1][i];answers[q.id]=(c&&c!=="-")?"abcd".indexOf(c):null});
+  return {name:String(a[0]),answers,used:+a[2],leaves:+a[3],at:+a[4],auto:a[5]===1,
+    w:{state:a[6],orders:a[7],cat:a[8],items:a[9],sellers:a[10],sql14:a[11],sql15:a[12]},
+    valid:hash(SALT+payload)===m[2],code:code.trim()};
 }
-function scoreOf(answers){return Q.reduce((n,q)=>n+(answers[q.id]===KEY[q.id]?1:0),0)}
+function mcqScore(answers){return MCQ.reduce((n,q)=>n+(answers[q.id]===KEY[q.id]?1:0),0)}
+function writtenMarks(w,exp){
+  const chk=(k,kind)=>{const e=exp[k];if(e==null||String(e).trim()==="")return null;return kind==="num"?normNum(w[k])===normNum(e):normTxt(w[k])===normTxt(e)};
+  return {state:chk("state","text"),orders:chk("orders","num"),cat:chk("cat","text"),items:chk("items","num"),sellers:chk("sellers","num")};
+}
 
 /* ---------- State ---------- */
-let S = load() || {phase:"start"};
+let S = load(STORE_KEY) || {phase:"start"};
 let timerId=null;
 const app=$("#app");
+const save=()=>store(STORE_KEY,S);
 
 function render(){
   clearInterval(timerId);
   if(location.hash==="#grader"){renderGrader();return}
+  if(location.hash==="#reset"){clearStore();S={phase:"start"};history.replaceState(null,"",location.pathname+location.search)}
   if(S.phase==="exam")renderExam();
   else if(S.phase==="done")renderDone();
   else renderStart();
@@ -271,20 +445,24 @@ function renderStart(){
     <div class="start">
       <div class="card stack">
         <h1>SQL Screening Test</h1>
-        <p class="muted" style="margin:0;max-width:60ch">This test works like the online SQL assessment in a real data engineering hiring process. Every question uses the Olist tables you queried in Week 2.</p>
+        <p class="muted" style="margin:0;max-width:60ch">This test works like the SQL assessment in a real data engineering hiring process. Every question uses the Olist tables you queried in Week 2.</p>
         <div class="facts">
-          <div class="fact"><b>${Q.length}</b><span class="muted">questions</span></div>
+          <div class="fact"><b>${MCQ.length+W.length}</b><span class="muted">questions</span></div>
           <div class="fact"><b>${DURATION_MIN}</b><span class="muted">minutes</span></div>
-          <div class="fact"><b>1</b><span class="muted">attempt</span></div>
+          <div class="fact"><b>${TOTAL}</b><span class="muted">points</span></div>
         </div>
-        <div class="topics">${[...new Set(Q.map(q=>q.topic))].map(t=>`<span class="chip">${t}</span>`).join("")}</div>
+        <div class="parts">
+          <div><b>Part A · Multiple choice</b><span class="muted">${MCQ.length} questions · 1 point each</span></div>
+          <div><b>Part B · Write &amp; run SQL</b><span class="muted">${W.length} questions · run your query on olist_dw and enter the result</span></div>
+        </div>
       </div>
       <div class="card stack">
         <h2>Before you start</h2>
         <ol class="rules">
           <li>Keep your camera on in Zoom for the whole test.</li>
-          <li>No notes, slides, psql or AI tools. Think it through like an interview.</li>
-          <li>Stay on this tab. Leaving the tab is recorded.</li>
+          <li>Open psql (or pgAdmin) connected to <code>olist_dw</code> now. You may use it for <b>Part B only</b>.</li>
+          <li>No notes, slides or AI tools.</li>
+          <li>Stay on this tab during Part A. Leaving the tab is recorded.</li>
           <li>The timer can't be paused. At 00:00 your answers are submitted automatically.</li>
           <li>When you finish, copy your result code into the Zoom chat.</li>
         </ol>
@@ -298,52 +476,80 @@ function renderStart(){
   inp.addEventListener("input",()=>go.disabled=inp.value.trim().length<2);
   inp.addEventListener("keydown",e=>{if(e.key==="Enter"&&!go.disabled)go.click()});
   go.addEventListener("click",()=>{
-    S={phase:"exam",name:inp.value.trim().replace(/\|/g," "),order:shuffle(Q.map(q=>q.id)),cur:0,answers:{},flags:{},leaves:0,startedAt:Date.now()};
-    save();
-    try{document.documentElement.requestFullscreen&&document.documentElement.requestFullscreen().catch(()=>{})}catch(e){}
-    render();
+    S={phase:"exam",name:inp.value.trim(),order:[...shuffle(MCQ.map(q=>q.id)),...W.map(w=>w.id)],cur:0,answers:{},written:{},flags:{},leaves:0,startedAt:Date.now()};
+    save();render();
   });
 }
 
 /* ---------- Exam ---------- */
+const findQ=id=>MCQ.find(q=>q.id===id)||W.find(w=>w.id===id);
+const isW=id=>W.some(w=>w.id===id);
+function isDone(id){
+  if(!isW(id))return S.answers[id]!=null;
+  const w=W.find(x=>x.id===id),v=S.written||{};
+  return !!(v["sql"+id]||"").trim() && w.fields.every(f=>(v[f.k]||"").trim());
+}
 function remaining(){return DURATION_MIN*60-(Date.now()-S.startedAt)/1000}
 function renderExam(){
   if(remaining()<=0){submit(true);return}
-  const qid=S.order[S.cur], q=Q.find(x=>x.id===qid);
-  const answered=Object.values(S.answers).filter(v=>v!=null).length;
+  const qid=S.order[S.cur], q=findQ(qid), written=isW(qid);
+  const done=S.order.filter(isDone).length;
+  const partB=written?`<span class="pill w">Part B · psql allowed</span>`:`<span class="pill">Part A</span>`;
+  let body;
+  if(!written){
+    body=`<div class="qtext">${q.text}</div>
+      ${q.code?`<pre>${esc(q.code)}</pre>`:""}
+      <div class="opts" role="radiogroup" aria-label="Answer options">
+        ${q.opts.map((o,i)=>`<label class="opt ${S.answers[qid]===i?"sel":""}">
+          <input type="radio" name="q${qid}" id="q${qid}o${i}" value="${i}" ${S.answers[qid]===i?"checked":""}>
+          <span class="key">${L[i]}</span>
+          <span class="body">${typeof o==="string"?esc(o):`<pre>${esc(o.code)}</pre>`}</span></label>`).join("")}
+      </div>`;
+  }else{
+    const v=S.written||{};
+    body=`<div class="qtext">${q.html}</div>
+      <div class="stack" style="gap:6px">
+        <label class="eyebrow" for="sql${qid}">1. Paste your query</label>
+        <textarea id="sql${qid}" class="sql" spellcheck="false" maxlength="1200" placeholder="SELECT ...">${esc(v["sql"+qid]||"")}</textarea>
+      </div>
+      <div class="fields">
+        ${q.fields.map((f,i)=>`<div class="stack" style="gap:6px"><label class="eyebrow" for="f_${f.k}">${i+2}. ${esc(f.label)}</label>
+          <input type="text" id="f_${f.k}" data-k="${f.k}" ${f.kind==="num"?'inputmode="numeric"':""} placeholder="${esc(f.ph)}" value="${esc(v[f.k]||"")}" autocomplete="off"></div>`).join("")}
+      </div>
+      <p class="muted" style="margin:0;font-size:.85rem">Type the numbers exactly as your query returns them. Your answers save as you type.</p>`;
+  }
   app.innerHTML=`
   <div class="bar"><div class="inner">
     <div><div class="eyebrow">Candidate</div><div class="who">${esc(S.name)}</div></div>
-    <div class="row"><span class="muted" style="font-variant-numeric:tabular-nums">${answered}/${Q.length} answered</span><div class="timer" id="timer" role="timer" aria-live="off">${fmt(remaining())}</div></div>
-  </div><div class="progress"><span style="width:${answered/Q.length*100}%"></span></div></div>
+    <div class="row"><span class="muted" id="cnt" style="font-variant-numeric:tabular-nums">${done}/${S.order.length} answered</span><div class="timer" id="timer" role="timer" aria-live="off">${fmt(remaining())}</div></div>
+  </div><div class="progress"><span id="prog" style="width:${done/S.order.length*100}%"></span></div></div>
   <div class="wrap">
-    ${S.leaves?`<div class="notice" style="margin-bottom:16px">You left this tab ${S.leaves} time${S.leaves>1?"s":""}. This is included in your result.</div>`:""}
+    ${S.leaves?`<div class="notice" style="margin-bottom:16px">You left this tab ${S.leaves} time${S.leaves>1?"s":""} during Part A. This is included in your result.</div>`:""}
     <div class="exam">
       <div class="card stack">
-        <div class="qhead"><span class="eyebrow">Question ${S.cur+1} of ${Q.length} · ${q.topic}</span>
-          <button class="ghost flagbtn ${S.flags[qid]?"on":""}" id="flag" aria-pressed="${!!S.flags[qid]}">${S.flags[qid]?"Flagged":"Flag for review"}</button></div>
-        <div class="qtext">${q.text}</div>
-        ${q.code?`<pre>${esc(q.code)}</pre>`:""}
-        <div class="opts" role="radiogroup" aria-label="Answer options">
-          ${q.opts.map((o,i)=>`<label class="opt ${S.answers[qid]===i?"sel":""}">
-            <input type="radio" name="q${qid}" id="q${qid}o${i}" value="${i}" ${S.answers[qid]===i?"checked":""}>
-            <span class="key">${L[i]}</span>
-            <span class="body">${typeof o==="string"?esc(o):`<pre>${esc(o.code)}</pre>`}</span></label>`).join("")}
-        </div>
+        <div class="qhead"><span class="eyebrow">Question ${S.cur+1} of ${S.order.length} · ${q.topic}${written?` · ${q.points} points`:""}</span>
+          <div class="row" style="gap:8px">${partB}<button class="ghost flagbtn ${S.flags[qid]?"on":""}" id="flag" aria-pressed="${!!S.flags[qid]}">${S.flags[qid]?"Flagged":"Flag for review"}</button></div></div>
+        ${body}
         <div class="row" style="justify-content:space-between">
           <button id="prev" ${S.cur===0?"disabled":""}>Previous</button>
-          ${S.cur<Q.length-1?`<button class="primary" id="next">Next</button>`:`<button class="primary" id="finish">Review &amp; submit</button>`}
+          ${S.cur<S.order.length-1?`<button class="primary" id="next">Next</button>`:`<button class="primary" id="finish">Review &amp; submit</button>`}
         </div>
       </div>
       <aside class="card stack nav" aria-label="Question navigator">
         <span class="eyebrow">Questions</span>
-        <div class="grid">${S.order.map((id,i)=>`<button data-i="${i}" class="${S.answers[id]!=null?"done":""} ${i===S.cur?"cur":""} ${S.flags[id]?"flag":""}" aria-label="Question ${i+1}">${i+1}</button>`).join("")}</div>
-        <div class="legend"><span><i class="sw" style="background:var(--accent-soft);border-color:var(--accent)"></i>Answered</span><span><i class="sw" style="box-shadow:inset 0 -3px 0 var(--flag)"></i>Flagged</span></div>
+        <div class="grid">${S.order.map((id,i)=>`<button data-i="${i}" class="${isDone(id)?"done":""} ${i===S.cur?"cur":""} ${S.flags[id]?"flag":""} ${isW(id)?"wq":""}" aria-label="Question ${i+1}">${i+1}</button>`).join("")}</div>
+        <div class="legend"><span><i class="sw" style="background:var(--accent-soft);border-color:var(--accent)"></i>Answered</span><span><i class="sw" style="box-shadow:inset 0 -3px 0 var(--flag)"></i>Flagged</span><span><i class="sw" style="border-style:dashed;border-color:var(--warn)"></i>Write &amp; run SQL</span></div>
         <button id="finish2">Submit test</button>
       </aside>
     </div>
   </div>`;
   app.querySelectorAll(".opt input").forEach(r=>r.addEventListener("change",()=>{S.answers[qid]=+r.value;save();renderExam()}));
+  if(written){
+    const upd=()=>{save();const d=S.order.filter(isDone).length;$("#cnt").textContent=`${d}/${S.order.length} answered`;$("#prog").style.width=(d/S.order.length*100)+"%";
+      app.querySelectorAll(".grid button").forEach(b=>b.classList.toggle("done",isDone(S.order[+b.dataset.i])))};
+    $("#sql"+qid).addEventListener("input",e=>{S.written["sql"+qid]=e.target.value;upd()});
+    app.querySelectorAll(".fields input").forEach(i=>i.addEventListener("input",()=>{S.written[i.dataset.k]=i.value;upd()}));
+  }
   $("#flag").onclick=()=>{S.flags[qid]=!S.flags[qid];save();renderExam()};
   $("#prev").onclick=()=>{S.cur--;save();renderExam()};
   const n=$("#next");if(n)n.onclick=()=>{S.cur++;save();renderExam()};
@@ -358,44 +564,46 @@ function tick(){
   if(t){t.textContent=fmt(r);t.className="timer"+(r<=60?" crit":r<=300?" low":"")}
 }
 function confirmSubmit(){
-  const blank=Q.length-Object.values(S.answers).filter(v=>v!=null).length;
+  const blank=S.order.filter(id=>!isDone(id)).length;
   const flagged=Object.values(S.flags).filter(Boolean).length;
   const m=document.createElement("div");m.className="modal";
   m.innerHTML=`<div class="card stack" role="dialog" aria-modal="true" aria-labelledby="mt">
     <h2 id="mt">Submit your test?</h2>
-    <p style="margin:0">${blank?`<b>${blank}</b> question${blank>1?"s are":" is"} unanswered. `:"All questions are answered. "}${flagged?`${flagged} flagged for review. `:""}You can't change answers after submitting.</p>
+    <p style="margin:0">${blank?`<b>${blank}</b> question${blank>1?"s are":" is"} not complete. `:"All questions are answered. "}${flagged?`${flagged} flagged for review. `:""}You can't change answers after submitting.</p>
     <div class="row" style="justify-content:flex-end"><button id="mc">Keep working</button><button class="primary" id="ms">Submit</button></div></div>`;
   document.body.appendChild(m);
   $("#mc",m).onclick=()=>m.remove();
   $("#ms",m).onclick=()=>{m.remove();submit(false)};
   $("#ms",m).focus();
 }
-function submit(auto){
+async function submit(auto){
   if(S.phase!=="exam")return;
   clearInterval(timerId);
   S.phase="done";S.auto=auto;S.submittedAt=Math.min(Date.now(),S.startedAt+DURATION_MIN*60000);
-  S.code=makeCode(S);save();
-  try{document.fullscreenElement&&document.exitFullscreen()}catch(e){}
+  S.code=await makeCode(S);save();
   render();
 }
 document.addEventListener("visibilitychange",()=>{
-  if(document.hidden&&S.phase==="exam"){S.leaves=(S.leaves||0)+1;save()}
-  else if(!document.hidden&&S.phase==="exam")renderExam();
+  if(S.phase!=="exam")return;
+  const onPartA=!isW(S.order[S.cur]);
+  if(document.hidden&&onPartA){S.leaves=(S.leaves||0)+1;save()}
+  else if(!document.hidden)renderExam();
 });
 
 /* ---------- Done ---------- */
 function renderDone(){
-  const sc=scoreOf(S.answers);
+  if(!S.code){makeCode(S).then(c=>{S.code=c;save();renderDone()});return}
+  const sc=mcqScore(S.answers);
   app.innerHTML=`
-  <div class="wrap stack" style="max-width:640px">
+  <div class="wrap stack" style="max-width:680px">
     <div class="eyebrow">Test submitted${S.auto?" · time ran out":""}</div>
     <div class="card stack">
       <h1>Thank you, ${esc(S.name)}</h1>
-      <div class="row" style="align-items:flex-end;gap:20px">
-        <div><div class="score">${sc}<span class="muted" style="font-size:1.4rem">/${Q.length}</span></div><span class="muted">your score</span></div>
-        <div class="muted">Time used ${fmt((S.submittedAt-S.startedAt)/1000)}</div>
+      <div class="row" style="align-items:flex-end;gap:24px">
+        <div><div class="score">${sc}<span class="muted" style="font-size:1.4rem">/${MCQ.length}</span></div><span class="muted">Part A score</span></div>
+        <div class="muted" style="max-width:34ch">Part B (write &amp; run SQL) is checked by your instructor.<br>Time used ${fmt((S.submittedAt-S.startedAt)/1000)}</div>
       </div>
-      <p style="margin:0">Copy your result code and paste it into the <b>Zoom chat</b>. Your instructor will go through the answers with everyone after the test.</p>
+      <p style="margin:0">Copy your result code and paste it into the <b>Zoom chat</b> as one message. It includes your SQL answers.</p>
       <div class="codebox" id="code">${esc(S.code)}</div>
       <div class="row"><button class="primary" id="copy">Copy result code</button><span class="muted" id="copied" aria-live="polite"></span></div>
     </div>
@@ -408,16 +616,17 @@ function renderDone(){
 }
 
 /* ---------- Grader (instructor) ---------- */
-let G={text:"",tab:"results",sort:"score"};
+let G={text:"",tab:"results",sort:"score",rows:[],exp:Object.assign({},DEFAULT_EXPECTED,load(CFG_KEY)||{}),focus:0};
+async function decodeAll(){
+  const codes=[...new Set((G.text.match(/SQL3-[zp][A-Za-z0-9_.]+-[0-9a-z]{6}/g)||[]))];
+  const parsed=(await Promise.all(codes.map(parseCode))).filter(Boolean);
+  const byName={};parsed.forEach(r=>{const k=r.name.toLowerCase();if(!byName[k]||r.at>byName[k].at)byName[k]=r});
+  G.rows=Object.values(byName);
+}
+function scored(){
+  return G.rows.map(r=>{const wm=writtenMarks(r.w,G.exp);const wpts=Object.values(wm).filter(v=>v===true).length;const m=mcqScore(r.answers);return {...r,wm,mcq:m,wpts,score:m+wpts}});
+}
 function renderGrader(){
-  const found=[...new Set((G.text.match(/SQL2-[A-Za-z0-9_.]+-[0-9a-z]{6}/g)||[]))].map(parseCode).filter(Boolean);
-  // keep the latest submission per name
-  const byName={};found.forEach(r=>{const k=r.name.toLowerCase();if(!byName[k]||r.at>byName[k].at)byName[k]=r});
-  let rows=Object.values(byName).map(r=>({...r,score:scoreOf(r.answers)}));
-  rows.sort(G.sort==="name"?(a,b)=>a.name.localeCompare(b.name):G.sort==="time"?(a,b)=>a.used-b.used:(a,b)=>b.score-a.score||a.used-b.used);
-  const avg=rows.length?rows.reduce((n,r)=>n+r.score,0)/rows.length:0;
-  const qstats=Q.map(q=>({q,pct:rows.length?rows.filter(r=>r.answers[q.id]===KEY[q.id]).length/rows.length:0}));
-  const band=s=>s/Q.length>=.8?"g":s/Q.length>=.6?"w":"b";
   app.innerHTML=`
   <div class="wrap stack">
     <div class="row" style="justify-content:space-between">
@@ -426,44 +635,80 @@ function renderGrader(){
     </div>
     <div class="card stack">
       <label for="paste" class="eyebrow">Paste the Zoom chat (or any text containing result codes)</label>
-      <textarea id="paste" placeholder="Copy the whole Zoom chat and paste it here. Codes look like SQL2-QXVuZy...-a1b2c3">${esc(G.text)}</textarea>
-      <div class="row muted"><span><b style="color:var(--fg)">${rows.length}</b> candidate${rows.length===1?"":"s"}</span>${rows.length?`<span>Average <b style="color:var(--fg)">${avg.toFixed(1)}/${Q.length}</b></span><span>Pass mark 12/${Q.length} (80%): <b style="color:var(--fg)">${rows.filter(r=>r.score>=12).length}</b> passed</span>`:""}</div>
+      <textarea id="paste" placeholder="Copy the whole Zoom chat and paste it here. Codes start with SQL3-">${esc(G.text)}</textarea>
+      <div class="row muted" id="summary"></div>
     </div>
+    <details class="card expected" ${G.exp.sellers?"":"open"}>
+      <summary><b>Expected answers for Part B</b> <span class="muted">· run the model answers on olist_dw and check these</span></summary>
+      <div class="expgrid">
+        ${[["state","Q14 · #1 state"],["orders","Q14 · its orders"],["cat","Q15 · #1 category"],["items","Q15 · its items sold"],["sellers","Q15 · its sellers"]].map(([k,l])=>`<div class="stack" style="gap:4px"><label class="eyebrow" for="e_${k}">${l}</label><input type="text" id="e_${k}" data-k="${k}" value="${esc(G.exp[k])}" placeholder="not set"></div>`).join("")}
+      </div>
+      <p class="muted" style="margin:0;font-size:.85rem">An empty box is not scored. Numbers ignore commas and spaces; names ignore letter case.</p>
+    </details>
     <div class="tabs" role="tablist">
-      ${[["results","Candidates"],["questions","By question"],["key","Answer key"]].map(([k,t])=>`<button role="tab" aria-selected="${G.tab===k}" data-tab="${k}">${t}</button>`).join("")}
+      ${[["results","Candidates"],["sql","SQL answers"],["questions","By question"],["key","Answer key"]].map(([k,t])=>`<button role="tab" aria-selected="${G.tab===k}" data-tab="${k}">${t}</button>`).join("")}
     </div>
     <div id="pane"></div>
   </div>`;
-  const pane=$("#pane");
+  let deb;
+  $("#paste").addEventListener("input",e=>{G.text=e.target.value;clearTimeout(deb);deb=setTimeout(async()=>{await decodeAll();renderPane()},250)});
+  app.querySelectorAll(".expgrid input").forEach(i=>i.addEventListener("input",()=>{G.exp[i.dataset.k]=i.value;store(CFG_KEY,G.exp);renderPane()}));
+  app.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{G.tab=b.dataset.tab;app.querySelectorAll("[data-tab]").forEach(x=>x.setAttribute("aria-selected",x===b));renderPane()});
+  $("#back").onclick=e=>{e.preventDefault();history.replaceState(null,"",location.pathname+location.search);render()};
+  renderPane();
+}
+const mark=v=>v===true?`<span class="ok">✓</span>`:v===false?`<span class="no">✗</span>`:`<span class="na">·</span>`;
+function renderPane(){
+  const pane=$("#pane");if(!pane)return;
+  let rows=scored();
+  rows.sort(G.sort==="name"?(a,b)=>a.name.localeCompare(b.name):G.sort==="time"?(a,b)=>a.used-b.used:(a,b)=>b.score-a.score||a.used-b.used);
+  const avg=rows.length?rows.reduce((n,r)=>n+r.score,0)/rows.length:0;
+  $("#summary").innerHTML=`<span><b style="color:var(--fg)">${rows.length}</b> candidate${rows.length===1?"":"s"}</span>${rows.length?`<span>Average <b style="color:var(--fg)">${avg.toFixed(1)}/${TOTAL}</b></span><span>Pass mark ${PASS}/${TOTAL}: <b style="color:var(--fg)">${rows.filter(r=>r.score>=PASS).length}</b> passed</span>`:""}`;
+  const band=s=>s/TOTAL>=.8?"g":s/TOTAL>=.6?"w":"b";
   if(G.tab==="results"){
     pane.innerHTML=rows.length?`<div class="tablewrap"><table>
-      <thead><tr><th data-s="name">Candidate</th><th data-s="score" class="c">Score</th><th data-s="time" class="c">Time</th><th class="c">Tab left</th>${Q.map(q=>`<th class="c" title="${esc(q.topic)}">Q${q.id}</th>`).join("")}<th>Check</th></tr></thead>
+      <thead><tr><th data-s="name">Candidate</th><th data-s="score" class="c">Total</th><th class="c">Part A</th><th class="c">Part B</th><th data-s="time" class="c">Time</th><th class="c">Tab left</th>${MCQ.map(q=>`<th class="c" title="${esc(q.topic)}">Q${q.id}</th>`).join("")}<th class="c">Q14</th><th class="c">Q15</th><th>Check</th></tr></thead>
       <tbody>${rows.map(r=>`<tr>
         <td>${esc(r.name)}</td>
-        <td class="c"><span class="pill ${band(r.score)}">${r.score}/${Q.length}</span></td>
+        <td class="c"><span class="pill ${band(r.score)}">${r.score}/${TOTAL}</span></td>
+        <td class="c">${r.mcq}/${MCQ.length}</td><td class="c">${r.wpts}/5</td>
         <td class="c">${fmt(r.used)}${r.auto?" ⏱":""}</td>
         <td class="c">${r.leaves?`<span class="pill w">${r.leaves}×</span>`:"0"}</td>
-        ${Q.map(q=>{const a=r.answers[q.id];return a==null?`<td class="c na">–</td>`:a===KEY[q.id]?`<td class="c ok">✓</td>`:`<td class="c no">${L[a]}</td>`}).join("")}
+        ${MCQ.map(q=>{const a=r.answers[q.id];return a==null?`<td class="c na">–</td>`:a===KEY[q.id]?`<td class="c ok">✓</td>`:`<td class="c no">${L[a]}</td>`}).join("")}
+        <td class="c">${mark(r.wm.state)}${mark(r.wm.orders)}</td><td class="c">${mark(r.wm.cat)}${mark(r.wm.items)}${mark(r.wm.sellers)}</td>
         <td>${r.valid?`<span class="muted">OK</span>`:`<span class="pill b">Edited code</span>`}</td></tr>`).join("")}</tbody></table></div>
-      <p class="muted" style="margin:8px 0 0;font-size:.85rem">Question numbers match the answer key, not each student's shuffled order. A red letter is the wrong option the student chose. ⏱ means time ran out.</p>`
+      <p class="muted" style="margin:8px 0 0;font-size:.85rem">A red letter is the wrong option chosen. Q14 shows state, orders; Q15 shows category, items, sellers (· = expected value not set). ⏱ means time ran out. Open "SQL answers" to read each student's queries.</p>`
       :`<div class="card muted">No result codes yet. Paste the Zoom chat above when students have submitted.</div>`;
-    pane.querySelectorAll("th[data-s]").forEach(th=>th.onclick=()=>{G.sort=th.dataset.s;renderGrader()});
+    pane.querySelectorAll("th[data-s]").forEach(th=>th.onclick=()=>{G.sort=th.dataset.s;renderPane()});
+  }else if(G.tab==="sql"){
+    pane.innerHTML=rows.length?rows.map(r=>`<div class="card stack sqlcard">
+      <div class="row" style="justify-content:space-between"><b>${esc(r.name)}</b><span class="muted">Part B ${r.wpts}/5 · Total ${r.score}/${TOTAL}</span></div>
+      <div class="sqlgrid">
+        <div class="stack" style="gap:6px;min-width:0"><span class="eyebrow">Q14 · orders per state</span><pre>${esc(r.w.sql14)||"<span class='na'>(no query)</span>"}</pre>
+          <div class="ans">#1 state <b>${esc(r.w.state)||"–"}</b> ${mark(r.wm.state)} · orders <b>${esc(r.w.orders)||"–"}</b> ${mark(r.wm.orders)}</div></div>
+        <div class="stack" style="gap:6px;min-width:0"><span class="eyebrow">Q15 · categories &amp; sellers</span><pre>${esc(r.w.sql15)||"<span class='na'>(no query)</span>"}</pre>
+          <div class="ans">#1 <b>${esc(r.w.cat)||"–"}</b> ${mark(r.wm.cat)} · items <b>${esc(r.w.items)||"–"}</b> ${mark(r.wm.items)} · sellers <b>${esc(r.w.sellers)||"–"}</b> ${mark(r.wm.sellers)}</div></div>
+      </div></div>`).join(""):`<div class="card muted">No result codes yet.</div>`;
+    pane.querySelectorAll(".sqlcard pre").forEach(p=>{p.style.whiteSpace="pre-wrap";p.style.wordBreak="break-word"});
   }else if(G.tab==="questions"){
-    pane.innerHTML=`<div class="card">${qstats.map(({q,pct})=>`<div class="qstat"><b>Q${q.id}</b><span style="min-width:0">${q.topic}<span class="muted"> · ${q.text.replace(/<[^>]+>/g,"").slice(0,70)}…</span></span><div class="meter ${pct<.5?"lo":""}"><span style="width:${pct*100}%"></span></div><span style="text-align:right">${rows.length?Math.round(pct*100)+"%":"–"}</span></div>`).join("")}
-    <p class="muted" style="margin:10px 0 0;font-size:.85rem">Questions under 50% (shown in red) are the ones to go through first in the debrief.</p></div>`;
+    const stats=[...MCQ.map(q=>({id:q.id,label:q.topic,txt:q.text.replace(/<[^>]+>/g,""),pct:rows.length?rows.filter(r=>r.answers[q.id]===KEY[q.id]).length/rows.length:0})),
+      {id:14,label:"Write & run SQL",txt:"Orders per customer state (both values correct)",pct:rows.length?rows.filter(r=>r.wm.state&&r.wm.orders).length/rows.length:0},
+      {id:15,label:"Write & run SQL",txt:"Categories: items and sellers (all three correct)",pct:rows.length?rows.filter(r=>r.wm.cat&&r.wm.items&&r.wm.sellers).length/rows.length:0}];
+    pane.innerHTML=`<div class="card">${stats.map(s=>`<div class="qstat"><b>Q${s.id}</b><span style="min-width:0">${s.label}<span class="muted"> · ${esc(s.txt.slice(0,70))}${s.txt.length>70?"…":""}</span></span><div class="meter ${s.pct<.5?"lo":""}"><span style="width:${s.pct*100}%"></span></div><span style="text-align:right">${rows.length?Math.round(s.pct*100)+"%":"–"}</span></div>`).join("")}
+    <p class="muted" style="margin:10px 0 0;font-size:.85rem">Questions under 50% (red) are the ones to go through first in the debrief.</p></div>`;
   }else{
-    pane.innerHTML=`<div class="card">${Q.map(q=>`<details class="key"><summary>Q${q.id} · ${q.topic} · Answer ${L[KEY[q.id]]}</summary>
+    pane.innerHTML=`<div class="card">${MCQ.map(q=>`<details class="key"><summary>Q${q.id} · ${q.topic} · Answer ${L[KEY[q.id]]}</summary>
       <div class="stack" style="margin-top:10px"><div class="qtext">${q.text}</div>${q.code?`<pre>${esc(q.code)}</pre>`:""}
       <div class="opts">${q.opts.map((o,i)=>`<div class="opt ${i===KEY[q.id]?"sel":""}" style="cursor:default"><span class="key">${L[i]}</span><span class="body">${typeof o==="string"?esc(o):`<pre>${esc(o.code)}</pre>`}</span></div>`).join("")}</div>
-      <div class="explain">${q.why}</div></div></details>`).join("")}</div>`;
+      <div class="explain">${q.why}</div></div></details>`).join("")}
+      ${W.map(w=>`<details class="key"><summary>Q${w.id} · Write &amp; run SQL · ${w.points} points</summary>
+      <div class="stack" style="margin-top:10px"><div class="qtext">${w.html}</div><span class="eyebrow">Model answer</span><pre>${esc(w.model)}</pre>
+      <div class="explain">${w.why}</div></div></details>`).join("")}</div>`;
   }
-  $("#paste").addEventListener("input",e=>{G.text=e.target.value;const pos=e.target.selectionStart;renderGrader();const t=$("#paste");t.focus();t.setSelectionRange(pos,pos)});
-  app.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{G.tab=b.dataset.tab;renderGrader()});
-  $("#back").onclick=e=>{e.preventDefault();history.replaceState(null,"",location.pathname+location.search);render()};
 }
 window.addEventListener("hashchange",render);
 
-/* Instructor tools for the owner */
+/* Instructor shortcut for the owner when opened as a Claude artifact */
 (async()=>{
   try{
     const u=window.claude&&await window.claude.use("user");
@@ -479,6 +724,5 @@ window.addEventListener("hashchange",render);
 render();
 })();
 </script>
-
 </body>
 </html>
